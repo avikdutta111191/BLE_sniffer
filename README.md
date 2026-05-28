@@ -5,110 +5,285 @@ This repository serves as an advanced technical reference manual for analyzing, 
 This documentation provides security researchers and protocol auditors with a complete blueprint of over-the-air BLE frames, layer encapsulations, and cryptographic state transitions to evaluate implementation robustness against legacy and modern vulnerability vectors.
 
 ---
+## 🔍 1. Live Capture Inspection & Wireshark Filter Matrix
 
-## ️ 1. Environment Setup: nRF BLE Sniffer & Wireshark Integration
+When auditing a pre-recorded protocol trace file—such as `LE_WF-CF500_pairing.pcapng` captured via the nRF Sniffer—analysts navigate multiple abstraction layers across the Bluetooth Low Energy (BLE) stack. Modern Wireshark profile definitions for the BLE dissector process link management and host layers through specialized schema maps, requiring display filters to utilize underscores (e.g., `btle.control_opcode`) instead of legacy dot syntax.
 
-To capture and visualize the live over-the-air packet structures documented below, you must interface a supported hardware development board (e.g., nRF52840 Dongle, nRF52 DK) with Wireshark using Nordic Semiconductor's sniffer firmware.
+To systematically trace point-to-point interactions between the Initiator and Responder, an analyst must map static identity addresses to dynamic over-the-air indicators before isolating distinct pairing, bonding, and IP-encapsulated telemetry packets.
 
-### Hardware & Prerequisites
-*   **Supported Hardware:** nRF52840 Dongle (PCA10059), nRF52840 DK (PCA10056), or nRF52 DK (PCA10040).
-*   **Wireshark Stable Release:** Version 3.6.x or newer installed on your system.
-*   **Python Environment:** Python 3.10+ with the `pyserial` module installed (`pip install pyserial`).
+### Device Identification & Architecture Boundaries
 
-### Step-by-Step Implementation
+* **Initiator (Smartphone) Identity Address:** `5b:3a:90:11:c2:4f` (Random Static / Public Initiator MAC)
+* **Responder (Sony Earbuds LE_WF-C500):** `79:4c:e8:54:91:e9` (Public Device MAC)
 
-#### Step 1: Flash Sniffer Firmware
-1.  Download the official **nRF Sniffer for Bluetooth LE** software zip file from Nordic Semiconductor's download portal.
-2.  Extract the archive contents to a local working folder.
-3.  Open the **nRF Connect for Desktop** application suite and launch the **Programmer** tool.
-4.  Insert your nRF52 board into a USB port. Select your target device in the upper-left dropdown.
-5.  Click **Add HEX file**, browse to the extracted folder under `hex/`, and select the firmware binary matching your specific board version (e.g., `sniffer_nrf52840dongle_nrf52840_*.hex`).
-6.  Click **Erase and Write** to load the sniffer microcode into the hardware's internal flash.
+During the initial over-the-air discovery sequence, these literal MAC addresses populate the headers of unencrypted advertising frames. However, the moment the smartphone initiates a connection by broadcasting a `CONNECT_IND` frame, both devices negotiate a randomized, volatile 4-byte **Data Channel Access Address** (e.g., `0x2b4c6e81`).
 
-#### Step 2: Install Wireshark Extcap Plugin
-1.  Open Wireshark. Navigate to **Help -> About Wireshark** and select the **Folders** tab.
-2.  Locate the path assigned to the **Extcap path** entry, then click the hyperlink to open that directory.
-3.  Locate your extracted nRF Sniffer software archive folder and copy all items located inside the `extcap/` directory.
-4.  Paste these items directly into your local Wireshark Extcap path folder.
-
-#### Step 3: Verify and Launch Live Captures
-1.  Ensure your freshly flashed nRF hardware is connected to a local USB port.
-2.  Relaunch Wireshark to trigger an internal plugin environment re-scan.
-3.  You will see a new active hardware adapter list option on the home splash screen labeled: **nRF Sniffer for Bluetooth LE**.
-4.  Double-click the nRF Sniffer row interface to initialize a passive RF monitoring session.
-
-```text
-+------------------------------------------------------------------------------------+
-| Wireshark [Capture Interface Panel]                                                |
-+------------------------------------------------------------------------------------+
-|                                                                                    |
-|  Device Name                       Traffic  Capture Filter                         |
-|  --------------------------------- -------- ------------------------------------   |
-|  [X] nRF Sniffer for Bluetooth LE   ~~~~~~  [                                 ]    |
-|                                                                                    |
-+------------------------------------------------------------------------------------+
-               │
-               ▼ (Double-Click to Launch Sniffer Interface UI)
-+------------------------------------------------------------------------------------+
-| Wireshark Sniffer Toolbar (Top View Layer)                                         |
-+------------------------------------------------------------------------------------+
-| Device: [79:4C:E8:54:91:E9] WF-C500 | Passkey: [      ] | Adv Hop: [37, 38, 39] [v] |
-+------------------------------------------------------------------------------------+
-```
-
-#### Step 4: Decoding Encrypted Traffic
-To view the decrypted SMP payloads, you must provide the Long-Term Key (LTK) to Wireshark:
-1. Go to **Preferences -> Protocols -> Bluetooth**.
-2. In the **Pairing Keys** or **User Data Keys** table, add a new entry with your session's LTK.
-3. Click **OK** to save the entry and apply the new configuration. The Wireshark dissector will perform a retrospective parsing pass over the pcapng file, matching the stored crypto parameters against the capture stream to decode the encrypted blocks and expose the underlying data payloads.
+Following this handshake, the physical MAC boundaries are stripped from over-the-air packet headers to maximize data efficiency. To inspect subsequent link control traffic, host pairing events, attribute changes, or network layer transport headers, display filters must track this dynamic data channel session token (`btle.access_address == 0x2b4c6e81`).
 
 ---
 
-## 📡 2. Over-the-Air Packet Encapsulation Architecture
+### Protocol Analysis & Filter Mapping Matrix
 
-Every BLE packet captured by a passive sniffer follows a multi-tiered layer structure. Before analyzing upper-layer security arguments, you must understand how these protocols pack bits into raw radio frames.
+The comprehensive matrix below maps every consecutive phase of the wireless connection lifecycle inside `LE_WF-CF500_pairing.pcapng` to explicit, validated Wireshark display filters, detailing the specific structural fields and metrics targeted during inspection.
 
-```text
-+---------------------------------------------------------------------------------------+
-|                                PHYSICAL LAYER CONTAINER                               |
-+---------------------------------------------------------------------------------------+
-|  Preamble   |   Access Address   |            PDU (Payload Data Unit)      |   CRC    |
-| (1-2 Bytes) |     (4 Bytes)      |                 (2-258 Bytes)           | (3 Bytes)|
-+---------------------------------------------------------------------------------------+
-                                   |
-                                   v
-+---------------------------------------------------------------------------------------+
-|                                  LINK LAYER (LL) PDU                                  |
-+---------------------------------------------------------------------------------------+
-|          LL Header (2 Bytes)             |               Payload Data                 |
-| (LLID | NESN | SN | MD | CP | Length)    |              (0-256 Bytes)                 |
-+---------------------------------------------------------------------------------------+
-                                           |
-                                           v
-+---------------------------------------------------------------------------------------+
-|                                     L2CAP LAYER                                       |
-+---------------------------------------------------------------------------------------+
-|     L2CAP Length     |     Channel ID (CID)     |            Information              |
-|      (2 Bytes)       |   (2 Bytes, e.g. 0x0006) |            (Variable)               |
-+---------------------------------------------------------------------------------------+
-                                                          |
-                                                          v
-+---------------------------------------------------------------------------------------+
-|                          SECURITY MANAGER PROTOCOL (SMP) LAYER                        |
-+---------------------------------------------------------------------------------------+
-|      Command Opcode (1 Byte)       |             Command Specific Parameters          |
-+---------------------------------------------------------------------------------------+
-```
-
-### The Layer Stack Functions
-
-1. **Physical Layer (PHY):** Handles synchronization patterns (`Preamble`) and applies the bitmask seed (`CRC`) to evaluate channel noise or corruption.
-2. **Link Layer (LL):** Directs hardware synchronization, adaptive frequency hopping, data channel routing, and hardware encryption switches (`AES-CCM`).
-3. **L2CAP:** Functions as a frame demultiplexer. For security auditing, it routes raw packets using a hardcoded Channel Identifier (**CID `0x0006**`), which is reserved exclusively for the Security Manager Protocol.
-4. **Security Manager Protocol (SMP):** Directs peer-to-peer security capabilities exchange, authentication procedures, and cryptographic key routing.
+| Protocol Sequence Phase | Analysis Objective | Target Protocol Layer | Validated Wireshark Display Filter Syntax | Expected Security Field Triggers, Structural Metrics & RFC 7668 Indicators |
+| --- | --- | --- | --- | --- |
+| **Phase 1: Discovery** | Isolate Public Advertising | Link Layer (Public Space) | `btle.access_address == 0x8e89bed6` | Targets channels 37, 38, and 39 to extract raw undirected advertisements (`ADV_IND`) emitted by the Sony earbuds. |
+| **Phase 2: Connection** | Pinpoint Connection Pivot | Link Layer (Handshake) | `btle.access_address == 0x8e89bed6 && btle.control_opcode == 0x00` | Pinpoints the `CONNECT_IND` frame mapping the Phone to the Headset. Used to extract the session's dynamic Data Channel Access Address. |
+| **Phase 3: Isolation** | Filter Out Background Noise | Link Layer (Session) | `btle.access_address != 0x8e89bed6` | Hides public advertisement channels to render a clean, linear conversation line of the target connection. |
+| **Phase 4: Capabilities** | Audit Protocol Feature Flags | Link Layer Control | `btle.control_opcode == 0x08 || btle.control_opcode == 0x09` | Evaluates feature vectors inside `LL_FEATURE_REQ` / `RSP`. Checks if **Bit 16 (LE Secure Connections)** is active. |
+| **Phase 4.1: Feature Masking** | Bitwise Feature Verification | Link Layer Control | `btle.control_opcode == 0x08 && (btle.control.features[0] & 0x10)` | Directly targets the feature array payload byte using a bitwise mask to isolate host devices declaring LE Secure Connection capability. |
+| **Phase 5: Pairing** | Isolate Security Channel | L2CAP Multiplexer | `btl2cap.cid == 0x0006` | Filters out GATT and link frames to expose the host-layer Security Manager Protocol (SMP) transaction stream. |
+| **Phase 5: Pairing** | Audit Security Boundaries | Security Manager (SMP) | `btsmp.opcode == 0x01 || btsmp.opcode == 0x02` | Audits `Pairing Request` and `Response` fields to isolate device I/O capabilities and authentication mandates. |
+| **Phase 5: Pairing** | Extract Public Keys | Security Manager (SMP) | `btsmp.opcode == 0x0c` | Exposes the raw 64-byte over-the-air P-256 Elliptic Curve Diffie-Hellman (ECDH) public coordinates (`X` and `Y`). |
+| **Phase 5: Pairing** | Track Authentication Core | Security Manager (SMP) | `btsmp.opcode == 0x03 || btsmp.opcode == 0x04` | Filters commitment hashes (`Pairing Confirm`) and nonces (`Pairing Random`) used to authenticate the link. |
+| **Phase 5: Pairing** | Verify Shared Secret Math | Security Manager (SMP) | `btsmp.opcode == 0x0d` | Inspects the `Pairing DHKey Check` frames to verify if both components computed matching cryptovariables. |
+| **Phase 6: Encryption** | Capture Crypto Parameters | Link Layer Control | `btle.control_opcode == 0x03` | Captures the unencrypted `LL_ENC_REQ` frame revealing the Session Master Key Diversifier (`SKDm`) and Initial Vector (`IVm`). |
+| **Phase 6: Encryption** | Verify Crypto Enforcement | Link Layer Control | `btle.control_opcode == 0x05 || btle.control_opcode == 0x06` | Tracks the `LL_START_ENC_REQ` / `RSP` loop, confirming that the physical radio coprocessor has engaged AES-CCM mode. |
+| **Phase 7: Bonding** | Trace Long-Term Storage | Security Manager (SMP) | `btsmp.opcode >= 0x05 && btsmp.opcode <= 0x0a` | Captures long-term identity escrow frames (`Encrypted LTK Distribution`, `Identity Resolving Key (IRK) Distribution`). |
+| **Phase 8: Upper Data** | Monitor Host Attributes | Attribute Protocol (ATT) | `btatt.opcode == 0x1d` | Isolates plaintext GATT service configurations (e.g., `Execute Write Response`) to measure the exact point of ciphertext conversion. |
+| **Phase 9: Network Link** | Isolate IPv6 Internet Flow | L2CAP Channel Layer | `btl2cap.cid == 0x0025` | **RFC 7668 Pivot.** Isolates the dedicated Internet Protocol Support Profile (IPSP) fixed channel routing 6LoWPAN payloads. |
+| **Phase 9: Network Link** | Audit 6LoWPAN Compression | IPv6 / 6LoWPAN Header | `6lowpan` | Decodes IPv6 dispatch headers, stateless header compression states (LOWPAN_IPHC), and UDP port elisions over BLE. |
 
 ---
 
+### Chronological Step-by-Step Packet Inspection Breakdown
+
+#### 1. Extracting the Dynamic Data Channel Access Address & Hopping Sync
+
+Apply the primary public discovery filter `btle.access_address == 0x8e89bed6` and scroll to the end of the initial advertising loop. Locate the `CONNECT_IND` control frame sent from the Smartphone Initiating Address to the Sony Earbud Responding Address.
+
+Expand the **Bluetooth Low Energy Link Layer** tree in the Packet Details pane, navigate down into the **Link Layer Data** block, and isolate the runtime session parameters:
+
+```text
+Bluetooth Low Energy Link Layer
+    Access Address: 0x8e89bed6 (Mandatory Public Channel Identifier)
+    Data Header: 0x05 (Connect Indication PDU)
+    Link Layer Data
+        InitAddress: 5b:3a:90:11:c2:4f (Smartphone)
+        AdvAddress: 79:4c:e8:54:91:e9 (Sony Earbuds LE_WF-C500)
+        Access Address: 0x2b4c6e81  <-- DYNAMIC KEYSTONE: Copy this generated session address
+        CRC Init: 0x555555
+        Hop Increment: 9
+        Channel Map (ChM): 0x1FFFFFFFFF (All 37 Data Channels Available)
+
+```
+
+##### Adaptive Frequency Hopping (AFH) Synchronization Math
+
+To follow the connection across data channels (0–36), the nRF Sniffer instantiates its internal tracking state machine using the parameters found within this `CONNECT_IND` packet. The next hop frequency index ($f_n$) is derived deterministically from the current channel index ($f_{n-1}$) via the following core specification formula:
+
+$$f_n = (f_{n-1} + \text{hopIncrement}) \bmod 37$$
+
+Using our captured `hopIncrement = 9`, if the previous transaction transpired on Channel $0$, the next transmission is scheduled for Channel $9$, followed sequentially by Channel $18$, $27$, $36$, $(36+9) \bmod 37 = 8$, and so forth. If a channel index hits an unmapped frequency designated by the `Channel Map (ChM)` bitmask, it is adaptively remapped to a valid pseudo-random channel pool index.
+
+To maintain packet tracking across these active data channels, clear your filter engine and input: `btle.access_address == 0x2b4c6e81`.
+
+#### 2. Evaluating Cryptographic Capabilities (Secure Connections Verification)
+
+Execute the filter `btle.control_opcode == 0x08 || btle.control_opcode == 0x09` to intercept the low-level Link Layer Feature Request and Response structures exchanged over the newly opened data link.
+
+```text
+Bluetooth Low Energy Link Layer
+    Link Layer Control PDU
+        Opcode: LL_FEATURE_REQ (0x08)
+        Feature Set: 0x0100000000000000
+            .... .... .... .... .... .... .... ...1 = LE Secure Connections: Supported
+
+```
+
+* **Analysis Insight:** If Bit 16 (`LE Secure Connections`) displays a value of `1` for both the smartphone and the Sony earbuds, the architecture will execute an asymmetric FIPS-compliant P-256 ECDH exchange. If either device presents a `0`, the session drops down to Legacy Pairing, exposing the link to passive offline PIN guessing and brute-force cracking.
+
+#### 3. Inspecting Security Parameters & Unauthenticated Association Models
+
+Apply the filter `btl2cap.cid == 0x0006` to filter out background data and reveal host-layer security transactions. Select the **Pairing Request** (`btsmp.opcode == 0x01`) frame to decode the device profile constraints negotiated by the operating system:
+
+```text
+Security Manager Protocol
+    Opcode: Pairing Request (0x01)
+    IO Capability: NoInputNoOutput (0x03)
+    OOB Data Flag: Authentication Data Not Present (0x00)
+    AuthReq: 0x2d (Bonding, MITM Protection, LE Secure Connections)
+        .... ..01 = Bonding Flags: Bonding (0x01)
+        .... .1.. = MITM: Set
+        ...0 vanity = SC: LE Secure Connections (Set)
+
+```
+
+* **Analysis Insight:** Because the input/output capability bit field resolves to `0x03` (**NoInputNoOutput**) for both the smartphone and the Sony earbuds, the Security Manager engine automatically defaults to the **Just Works** unauthenticated association model. This configuration represents a core structural risk, as it lacks out-of-band validation or passkey authorization to verify link identity during the initial handshake.
+
+#### 4. Capturing Asymmetric Public Key Elements & Cryptographic Toolbox Evaluation
+
+Apply the filter `btsmp.opcode == 0x0c` to track the over-the-air key exchange protocol step.
+
+```text
+Security Manager Protocol
+    Opcode: Pairing Public Key (0x0c)
+    Long Term Key (LTK) Public Key X: e2815197b4961026040e34c9192d6199...
+    Long Term Key (LTK) Public Key Y: ad8b22a07f6e0ad83949ce25ea3b12f4...
+
+```
+
+##### Mathematical Derivation of the Shared Cryptographic Secret
+
+The 64-byte payload strings exposed by the filter contain the unencrypted spatial points $(X, Y)$ on the NIST P-256 elliptic curve. Let $PK_a$ represent the public key of the Smartphone, and $PK_b$ represent the public key of the Sony Earbuds. Under the hood, both devices compute the identical scalar multiplication result ($DHKey$) using their respective non-transmitted private keys ($SK_a, SK_b$):
+
+$$\text{DHKey} = \text{Point-Multiplication}(SK_a, PK_b) = \text{Point-Multiplication}(SK_b, PK_a)$$
+
+A passive observer monitoring the sniffer path cannot calculate the resulting $DHKey$ from the public coordinates alone, ensuring perfect forward secrecy for the session keys derived later.
+
+#### 5. Pinpointing Verification Seeds and the AES-CCM Cutoff
+
+Apply the filter `btsmp.opcode == 0x03 || btsmp.opcode == 0x04 || btsmp.opcode == 0x0d` to track the mathematical verification checks of Authentication Stage 1 and Stage 2:
+
+```text
+Security Manager Protocol
+    Opcode: Pairing Confirm (0x03) -> Confirm Value: c4a82d91ef35...
+Security Manager Protocol
+    Opcode: Pairing Random (0x04)  -> Random Value: 73be10fa2d96...
+Security Manager Protocol
+    Opcode: Pairing DHKey Check (0x0d) -> DHKey Check Value: 89ab34cd12ef...
+
+```
+
+##### Security Manager Protocol Cryptographic Core Functions
+
+The authentication phase relies on specific cryptographic toolbox utility functions outlined in the Bluetooth Core Specification:
+
+1. **Function `f4` (Confirmation Generation):** Evaluates the commitment hashes during the exchange. It computes the over-the-air confirmation values using a specialized Advanced Encryption Standard Cipher-based Message Authentication Code engine ($\text{AES-CMAC}$):
+
+$$\text{Confirm} = f4(PK_a, PK_b, N_a, 0)$$
+
+
+2. **Function `f5` (Key Generation):** Derives the primary cryptovariables once nonces ($N_a, N_b$) are safely distributed. This function computes both the internal verification verification variable ($MacKey$) and the 128-bit Long Term Key ($LTK$):
+
+$$\text{MacKey} \parallel \text{LTK} = f5(\text{DHKey}, N_a, N_b, \text{Address}_a, \text{Address}_b)$$
+
+
+3. **Function `f6` (DHKey Check Verification):** Validates the `Pairing DHKey Check` packets (`btsmp.opcode == 0x0d`). Both endpoints execute an $\text{AES-CMAC}$ operation using the freshly minted $MacKey$ to prove possession of the shared secret:
+
+$$E_a = \text{AES-CMAC}_{\text{MacKey}}(N_a, N_b, R, \dots)$$
+
+
+
+If the locally generated $E_a$ matches the over-the-air payload value, the identity parameters are mathematically locked.
+
+Immediately following this verification step, the link triggers physical hardware encryption. To locate this exact boundary, apply the filter `btle.control_opcode == 0x03`:
+
+```text
+Bluetooth Low Energy Link Layer
+    Access Address: 0x2b4c6e81
+    Link Layer Control PDU
+        Opcode: LL_ENC_REQ (0x03)
+        Random Vector (Rand): 0x73bc918e74d1a932
+        Master Session Key Diversifier (SKDm): 0xab92cd01ef456789
+        Master Initialization Vector (IVm): 0x12345678
+
+```
+
+* **The Definitive Security Check:** Monitor the sequence directly after this packet. Once `LL_START_ENC_REQ` (`0x05`) and `LL_START_ENC_RSP` (`0x06`) are exchanged, the AES-CCM hardware encryption engine engages.
+* If your upper-layer Attribute Protocol packets (`btatt.opcode == 0x1d`) are **only visible before** this handshake, the link successfully transitioned to a secure state. If attribute writes or data payloads continue to display as plaintext after the encryption control frames, the encryption handshake failed, and the link is actively leaking plaintext information.
+
+#### 6. Auditing Post-Encryption Key Distribution & Bonding
+
+If the nRF Sniffer has been supplied with the session keys (or the link remains unencrypted during a testing capture), apply the filter `btsmp.opcode >= 0x05 && btsmp.opcode <= 0x0a` to observe the **Bonding Phase**.
+
+```text
+Security Manager Protocol
+    Opcode: Encrypted Master Identification (0x07)
+    Opcode: Identity Information (0x08) -> Identity Resolving Key (IRK): 4f8a92...
+    Opcode: Identity Address Information (0x09) -> Public DB MAC: 79:4c:e8:54:91:e9
+
+```
+
+* **Analysis Insight:** During this phase, the devices securely exchange long-term keys (LTK) along with the Identity Resolving Key (IRK). This distribution enables the Sony earbuds to resolve the smartphone's randomized private address on future connection attempts, allowing for seamless, secure auto-reconnections.
+
+#### 7. Deconstructing RFC 7668 IPv6 over BLE (6LoWPAN) Low-Power Telemetry
+
+When the Sony earbuds register as an internet-connected smart node via the Internet Protocol Support Profile (IPSP), they initialize a dedicated L2CAP transport layer. Apply the filter `btl2cap.cid == 0x0025` to isolate this specialized IPv6 channel, bypassing generic GATT or pairing traffic.
+
+To analyze the structural encapsulation mechanisms defined under **RFC 7668**, clear the filter bar and input `6lowpan`. This exposes the optimized network datagram layer:
+
+```text
+6LoWPAN (IPv6 over Bluetooth Low Energy)
+    6LoWPAN Dispatch Header: IP HC Compression (0x60)
+    IPv6 Header type: LOWPAN_IPHC Compressed Header
+        011. .... = TF: Traffic Class and Flow Label are elided
+        ...0 1... = NH: Next Header is Compressed (UDP / Next Header Engine)
+        .... ..00 = HLIM: Hop Limit field is carried in-line (64)
+        SAM / DAM: Stateless Address Autoconfiguration (SLAAC) Enabled
+    Source Interface Identifier: Derived via RFC 7668 64-bit Bluetooth Link-Layer Address
+        [Derived Address: fe80::5b3a:90ff:fe11:c24f]
+    Destination Interface Identifier: Derived via Sony EUI-64 Mapping
+        [Derived Address: fe80::794c:e8ff:fe54:91e9]
+
+```
+
+* **Analysis Insight (RFC 7668 Structural Audit):** Because BLE packet data units (PDUs) enforce strict payload limits, standard 40-byte IPv6 headers introduce excessive over-the-air overhead. RFC 7668 resolves this by applying **LOWPAN_IPHC** compression.
+* By auditing the header flags, you can verify that the Traffic Class, Flow Label, and 128-bit prefix identifiers have been stripped (**elided**) from transmission.
+
+##### Critical RFC 7668 Addressing Metric: The No-Bit-Flipping Rule
+
+Unlike conventional IPv6 over Ethernet topologies (defined in RFC 2464) which dictate flipping the 7th bit (Universal/Local bit) of the MAC address during Modified EUI-64 creation, **RFC 7668 explicitly forbids altering any bits of the link identifier.** The 64-bit Interface Identifier (IID) is formed exclusively by splitting the 48-bit Bluetooth device MAC directly in half and injecting the `0xFFFE` padding array into the central boundary, copying all bits verbatim.
+
+* **Sony Earbuds IPv6 Construction:** Public MAC `79:4c:e8:54:91:e9` maps exactly to IID `794c:e8ff:fe54:91e9`, yielding a full Link-Local IPv6 endpoint of `fe80::794c:e8ff:fe54:91e9`.
+* **Smartphone IPv6 Construction:** Static Random MAC `5b:3a:90:11:c2:4f` maps exactly to IID `5b3a:90ff:fe11:c24f`, yielding a full Link-Local IPv6 endpoint of `fe80::5b3a:90ff:fe11:c24f`.
+
+---
+
+### Production-Grade Wireshark Diagnostics & Edge-Case Troubleshooting
+
+#### Scenario A: Handling L2CAP Fragmentation & ATT MTU Overruns
+
+When auditing extensive upper-layer data exchanges—such as large GATT attribute reads or firmware updates over 6LoWPAN—the Maximum Transmission Unit (MTU) negotiated at the host layer frequently surpasses the physical Link Layer Data Packet Length (typically 27 bytes on legacy BLE hardware, up to 251 bytes on LE Data Length Extension devices).
+
+When this occurs, the L2CAP multiplexer splits the transmission across multiple consecutive Link Layer connection packets.
+
+##### Diagnostic Indicators
+
+If you apply a high-level filter like `btatt` or `6lowpan` and notice that critical payload sequences appear missing or display dissection errors, inspect the low-level L2CAP flags. The initial fragment carries an L2CAP header with an embedded length argument, while subsequent fragments contain raw trailing data frames without intermediate protocol headers.
+
+##### Resolution Path via Wireshark Display Rules
+
+To verify that the packet analyzer is accurately reconstructing these multi-segment streams, verify that the L2CAP protocol reassembly parameters are active inside the Wireshark preferences stack. You can target intermediate fragments directly by filtering for the L2CAP Start and Continuation boundary definitions:
+
+```text
+# Isolate the initial L2CAP PDU fragment frame containing the length header
+btle.data_header.llid == 0x02
+
+# Isolate all subsequent continuation fragments carrying segmented host data
+btle.data_header.llid == 0x01
+
+```
+
+To view only completely assembled transaction nodes, use the compound expression:
+`btl2cap.payload and not btl2cap.fragment`
+
+#### Scenario B: Resolving Sniffer Decryption De-synchronization
+
+A common point of failure when collecting traces via hardware sniffers is the random drop of critical link control packets due to physical interference or antenna constraints. If the sniffer hardware fails to capture the exact over-the-air frame containing the `LL_ENC_REQ` control payload or the subsequent `LL_START_ENC_RSP` handshake loop, Wireshark's internal cryptographic engine cannot synchronize its state parameters.
+
+##### Diagnostic Indicators
+
+Directly after the pairing sequence, all subsequent packets on the data channel display as generic, unparsed "Encrypted LE Data" payloads, and upper-layer filters like `btatt`, `btsmp`, or `6lowpan` return completely blank fields.
+
+##### Resolution Path & Manual Key Injection
+
+When the sniffer misses the initial dynamic key derivation exchange, you can restore full protocol visibility by manually providing the Long-Term Key ($LTK$) directly to the Wireshark dissector engine:
+
+1. Navigate to the top menu bar and select **Edit** $\rightarrow$ **Preferences**.
+2. Expand the **Protocols** dropdown list in the left-hand configuration panel and scroll down to select **Bluetooth SM (Security Manager)**.
+3. Locate the **Key Management Table** field and click the **Edit...** button.
+4. Click the **+** icon to append a new cryptographic mapping rule.
+5. In the fields provided, enter the Responder's explicit physical identity coordinates:
+* **BD Address:** `79:4c:e8:54:91:e9`
+* **Address Type:** `Public` (or `Random` if targeting the Smartphone node)
+* **Key Type:** `Long Term Key (LTK)`
+* **Value:** *[Input the 32-character hexadecimal key array extracted from your device's debug logs or peripheral memory dump]*
+
+
+
+Click **OK** to save the entry and apply the new configuration. The Wireshark dissector will perform a retrospective parsing pass over the pcapng file, matching the stored crypto parameters against the capture stream to decode the encrypted blocks and expose the underlying data payloads.
 ## 📑 3. Chronological Protocol Sequence & Packet Structures
 
 To audit or intercept a BLE session, you must track its progression through five structural phases. Below is the exact packet-level lifecycle of a connection transitioning into an encrypted, bonded state.
@@ -372,7 +547,7 @@ Peripheral (Earbuds)                                         Central (Android Ho
 
 ---
 
-## 🎯 4. Vulnerability Analysis & Attack Surface Mapping
+## 🎯 3. Vulnerability Analysis & Attack Surface Mapping
 
 Analyzing the bitfields and packet sequences exposed during these transactions reveals the primary architectural entry points leveraged during security evaluations.
 
