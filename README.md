@@ -6,7 +6,65 @@ This documentation provides security researchers and protocol auditors with a co
 
 ---
 
-## 📡 1. Over-the-Air Packet Encapsulation Architecture
+## ️ 1. Environment Setup: nRF BLE Sniffer & Wireshark Integration
+
+To capture and visualize the live over-the-air packet structures documented below, you must interface a supported hardware development board (e.g., nRF52840 Dongle, nRF52 DK) with Wireshark using Nordic Semiconductor's sniffer firmware.
+
+### Hardware & Prerequisites
+*   **Supported Hardware:** nRF52840 Dongle (PCA10059), nRF52840 DK (PCA10056), or nRF52 DK (PCA10040).
+*   **Wireshark Stable Release:** Version 3.6.x or newer installed on your system.
+*   **Python Environment:** Python 3.10+ with the `pyserial` module installed (`pip install pyserial`).
+
+### Step-by-Step Implementation
+
+#### Step 1: Flash Sniffer Firmware
+1.  Download the official **nRF Sniffer for Bluetooth LE** software zip file from Nordic Semiconductor's download portal.
+2.  Extract the archive contents to a local working folder.
+3.  Open the **nRF Connect for Desktop** application suite and launch the **Programmer** tool.
+4.  Insert your nRF52 board into a USB port. Select your target device in the upper-left dropdown.
+5.  Click **Add HEX file**, browse to the extracted folder under `hex/`, and select the firmware binary matching your specific board version (e.g., `sniffer_nrf52840dongle_nrf52840_*.hex`).
+6.  Click **Erase and Write** to load the sniffer microcode into the hardware's internal flash.
+
+#### Step 2: Install Wireshark Extcap Plugin
+1.  Open Wireshark. Navigate to **Help -> About Wireshark** and select the **Folders** tab.
+2.  Locate the path assigned to the **Extcap path** entry, then click the hyperlink to open that directory.
+3.  Locate your extracted nRF Sniffer software archive folder and copy all items located inside the `extcap/` directory.
+4.  Paste these items directly into your local Wireshark Extcap path folder.
+
+#### Step 3: Verify and Launch Live Captures
+1.  Ensure your freshly flashed nRF hardware is connected to a local USB port.
+2.  Relaunch Wireshark to trigger an internal plugin environment re-scan.
+3.  You will see a new active hardware adapter list option on the home splash screen labeled: **nRF Sniffer for Bluetooth LE**.
+4.  Double-click the nRF Sniffer row interface to initialize a passive RF monitoring session.
+
+```text
++------------------------------------------------------------------------------------+
+| Wireshark [Capture Interface Panel]                                                |
++------------------------------------------------------------------------------------+
+|                                                                                    |
+|  Device Name                       Traffic  Capture Filter                         |
+|  --------------------------------- -------- ------------------------------------   |
+|  [X] nRF Sniffer for Bluetooth LE   ~~~~~~  [                                 ]    |
+|                                                                                    |
++------------------------------------------------------------------------------------+
+               │
+               ▼ (Double-Click to Launch Sniffer Interface UI)
++------------------------------------------------------------------------------------+
+| Wireshark Sniffer Toolbar (Top View Layer)                                         |
++------------------------------------------------------------------------------------+
+| Device: [79:4C:E8:54:91:E9] WF-C500 | Passkey: [      ] | Adv Hop: [37, 38, 39] [v] |
++------------------------------------------------------------------------------------+
+```
+
+#### Step 4: Decoding Encrypted Traffic
+To view the decrypted SMP payloads, you must provide the Long-Term Key (LTK) to Wireshark:
+1. Go to **Preferences -> Protocols -> Bluetooth**.
+2. In the **Pairing Keys** or **User Data Keys** table, add a new entry with your session's LTK.
+3. Click **OK** to save the entry and apply the new configuration. The Wireshark dissector will perform a retrospective parsing pass over the pcapng file, matching the stored crypto parameters against the capture stream to decode the encrypted blocks and expose the underlying data payloads.
+
+---
+
+## 📡 2. Over-the-Air Packet Encapsulation Architecture
 
 Every BLE packet captured by a passive sniffer follows a multi-tiered layer structure. Before analyzing upper-layer security arguments, you must understand how these protocols pack bits into raw radio frames.
 
@@ -40,7 +98,6 @@ Every BLE packet captured by a passive sniffer follows a multi-tiered layer stru
 +---------------------------------------------------------------------------------------+
 |      Command Opcode (1 Byte)       |             Command Specific Parameters          |
 +---------------------------------------------------------------------------------------+
-
 ```
 
 ### The Layer Stack Functions
@@ -49,62 +106,6 @@ Every BLE packet captured by a passive sniffer follows a multi-tiered layer stru
 2. **Link Layer (LL):** Directs hardware synchronization, adaptive frequency hopping, data channel routing, and hardware encryption switches (`AES-CCM`).
 3. **L2CAP:** Functions as a frame demultiplexer. For security auditing, it routes raw packets using a hardcoded Channel Identifier (**CID `0x0006**`), which is reserved exclusively for the Security Manager Protocol.
 4. **Security Manager Protocol (SMP):** Directs peer-to-peer security capabilities exchange, authentication procedures, and cryptographic key routing.
-
----
-
-## ️ 2. Environment Setup: nRF BLE Sniffer & Wireshark Integration
-
-To capture and visualize the live over-the-air packet structures documented below, you must interface a supported hardware development board (e.g., nRF52840 Dongle, nRF52 DK) with Wireshark using Nordic Semiconductor's sniffer firmware.
-
-### Hardware & Prerequisites
-*   **Supported Hardware:** nRF52840 Dongle (PCA10059), nRF52840 DK (PCA10056), or nRF52 DK (PCA10040).
-*   **Wireshark Stable Release:** Version 3.6.x or newer installed on your system.
-*   **Python Environment:** Python 3.10+ with the `pyserial` module installed (`pip install pyserial`).
-
-### Step-by-Step Implementation
-
-#### Step 1: Flash Sniffer Firmware
-1.  Download the official **nRF Sniffer for Bluetooth LE** software zip file from Nordic Semiconductor's download portal.
-2.  Extract the archive contents to a local working folder.
-3.  Open the **nRF Connect for Desktop** application suite and launch the **Programmer** tool.
-4.  Insert your nRF52 board into a USB port. Select your target device in the upper-left dropdown.
-5.  Click **Add HEX file**, browse to the extracted folder under `hex/`, and select the firmware binary matching your specific board version (e.g., `sniffer_nrf52840dongle_nrf52840_*.hex`).
-6.  Click **Erase and Write** to load the sniffer microcode into the hardware's internal flash.
-
-#### Step 2: Install Wireshark Extcap Plugin
-1.  Open Wireshark. Navigate to **Help -> About Wireshark** and select the **Folders** tab.
-2.  Locate the path assigned to the **Extcap path** entry, then click the hyperlink to open that directory.
-3.  Locate your extracted nRF Sniffer software archive folder and copy all items located inside the `extcap/` directory.
-4.  Paste these items directly into your local Wireshark Extcap path folder. The directory should now contain files such as `nrf_sniffer_ble.py`, `nrf_sniffer_ble.bat`, and an internal `SnifferAPI/` module subfolder.
-
-#### Step 3: Verify and Launch Live Captures
-1.  Ensure your freshly flashed nRF hardware is connected to a local USB port.
-2.  Relaunch Wireshark to trigger an internal plugin environment re-scan.
-3.  You will see a new active hardware adapter list option on the home splash screen labeled: **nRF Sniffer for Bluetooth LE**.
-4.  Double-click the nRF Sniffer row interface to initialize a passive RF monitoring session.
-
-```text
-+------------------------------------------------------------------------------------+
-| Wireshark [Capture Interface Panel]                                                |
-+------------------------------------------------------------------------------------+
-|                                                                                    |
-|  Device Name                       Traffic  Capture Filter                         |
-|  --------------------------------- -------- ------------------------------------   |
-|  [X] nRF Sniffer for Bluetooth LE   ~~~~~~  [                                 ]    |
-|                                                                                    |
-+------------------------------------------------------------------------------------+
-               │
-               ▼ (Double-Click to Launch Sniffer Interface UI)
-+------------------------------------------------------------------------------------+
-| Wireshark Sniffer Toolbar (Top View Layer)                                         |
-+------------------------------------------------------------------------------------+
-| Device: [79:4C:E8:54:91:E9] WF-C500 | Passkey: [      ] | Adv Hop: [37, 38, 39] [v] |
-+------------------------------------------------------------------------------------+
-```
-
-Once active, a dedicated nRF Sniffer Toolbar appears below the filter text bar.
-
-Click the **Device** dropdown menu button and choose your peripheral device target signature string (`LE_WF-C500` or its target MAC hardware marker `79:4c:e8:54:91:e9`) to instruct the sniffer hardware to lock onto that device's connection events.
 
 ---
 
@@ -418,7 +419,7 @@ The Bluetooth Core Specification permits paired devices to renegotiate long-term
 
 ---
 
-## 🔒 5. Protocol Hardening & Defense Matrix
+## 🔒 6. Protocol Hardening & Defense Matrix
 
 To defend against passive sniffing, offline cracking, and re-pairing exploits, implement the following security controls within your BLE stack:
 
@@ -427,3 +428,4 @@ To defend against passive sniffing, offline cracking, and re-pairing exploits, i
 3. **Enforce Cross-Transport Key Derivation (CTKD) Checks:** Validate key distribution flags during transport switches to prevent context-switching and impersonation attacks.
 4. **Require User Confirmation for Re-Bonding:** If a re-pairing event is triggered, the host application must prompt for user verification (e.g., a manual confirmation click) before updating or replacing existing security keys in non-volatile flash storage.
 
+"
